@@ -145,14 +145,15 @@ unsafe extern "system" fn keybd_proc(code: c_int, w_param: WPARAM, l_param: LPAR
                     // check if atleast one crtl is currently pressed
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(1));
-                        let content = clipboard_win::get_clipboard(clipboard_win::formats::Unicode)
-                            .unwrap_or_else(|e| {
-                                log_and_panic(&format!("could not get clipboard: {}", e));
-                                unreachable!();
-                            });
-
-                        log(&format!("Copied <{}>\n", &content));
-                        send_action(ClipboardAction::Store(content));
+                        match clipboard_win::get_clipboard(clipboard_win::formats::Unicode) {
+                            Ok(content) => {
+                                log(&format!("Copied <{}>\n", &content));
+                                send_action(ClipboardAction::Store(content));
+                            }
+                            Err(e) => {
+                                log(&format!("could not get clipboard: {}", e));
+                            }
+                        }
                     });
                 }
             }
@@ -167,7 +168,7 @@ unsafe extern "system" fn keybd_proc(code: c_int, w_param: WPARAM, l_param: LPAR
                     }).clone();
 
                     if let Some(content) = content {
-                        log(&format!("Insertet <{}>\n", &content));
+                        log(&format!("Inserted <{}>\n", &content));
                         if let Err(e) =
                             clipboard_win::set_clipboard(clipboard_win::formats::Unicode, content)
                         {

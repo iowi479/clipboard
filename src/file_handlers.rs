@@ -135,6 +135,10 @@ impl FileHandler {
         }
         Ok(())
     }
+
+    fn try_delete_file(&self, file_path: &str) -> io::Result<()> {
+        fs::remove_file(&file_path)
+    }
 }
 
 pub fn provide_file_handler(handler: FileHandler) -> Sender<ClipboardAction> {
@@ -166,6 +170,10 @@ pub fn provide_file_handler(handler: FileHandler) -> Sender<ClipboardAction> {
                     *loaded_clipboard.lock().unwrap() = Some(content);
                     if let Err(e) = handler.try_delete_own_file() {
                         log_and_panic(&format!("could not delete own file: {}\n", e));
+                    }
+
+                    if let Err(e) = handler.try_delete_file(&file_name) {
+                        log_and_panic(&format!("could not delete file: {}\n", e));
                     }
                 }
             },

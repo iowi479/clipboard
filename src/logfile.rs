@@ -13,6 +13,8 @@ pub fn log(content: &str) {
 
     file.write(content.as_bytes())
         .expect("could not write to logfile");
+
+    println!("{}", content);
 }
 
 pub fn log_and_panic(error: &str) {
