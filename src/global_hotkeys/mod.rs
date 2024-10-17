@@ -92,7 +92,7 @@ pub fn set_action_sender(sender: mpsc::Sender<ClipboardAction>) {
     CLIPBOARD_ACTION_SENDER
         .lock()
         .unwrap_or_else(|e| {
-            &format!("could not aquire action sender {}", e);
+            let _ = &format!("could not aquire action sender {}", e);
             unreachable!();
         })
         .replace(sender);
@@ -162,7 +162,7 @@ unsafe extern "system" fn keybd_proc(code: c_int, w_param: WPARAM, l_param: LPAR
                 {
                     // check if atleast one crtl is currently pressed
                     let content = LOADED_CLIPBOARD.lock().unwrap_or_else(|e| {
-                        &format!("Could not aquire lock for the loaded clipboard value. This means the loading of a value failed or is still locking it... {}", e);
+                        let _ = &format!("Could not aquire lock for the loaded clipboard value. This means the loading of a value failed or is still locking it... {}", e);
                         unreachable!();
                     }).clone();
 
