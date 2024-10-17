@@ -1,6 +1,6 @@
 [package]
 name = "clipboard"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Simon Schindler"]
 edition = "2021"
 readme = "README.md"
