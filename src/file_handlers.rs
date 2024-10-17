@@ -1,5 +1,7 @@
 use crate::config::Config;
 use crate::global_hotkeys::LOADED_CLIPBOARD;
+use crate::logfile::{log, log_and_panic};
+use crate::utils::get_timestamp;
 use std::{
     fs, io,
     sync::mpsc::{self, Sender},
@@ -26,7 +28,13 @@ impl FileHandler {
         let files: Vec<_> = fs::read_dir(&self.config.dir_name)?
             .map(|entry| {
                 entry
-                    .expect("couldnt read a file name. Something went wrong with the filesystem")
+                    .unwrap_or_else(|e| {
+                        log_and_panic(&format!(
+                            "could not read a file name. Something went wrong with the filesystem {}",
+                            e
+                        ));
+                        unreachable!();
+                    })
                     .file_name()
                     .to_string_lossy()
                     .to_string()
@@ -37,7 +45,10 @@ impl FileHandler {
     }
 
     fn get_file_to_load(&self) -> Option<String> {
-        let files = self.get_all_files().expect("could not read files");
+        let files = self.get_all_files().unwrap_or_else(|e| {
+            log_and_panic(&format!("could not read files {}", e));
+            unreachable!();
+        });
 
         let mut most_recent_file = None;
         let mut most_recent_timestamp = None;
@@ -64,16 +75,23 @@ impl FileHandler {
                         // now this needs to be checked if it is the most recent file
 
                         if !file.ends_with(".tmp") {
-                            eprintln!("file \"{}\" does not end with .tmp", file);
-                            eprintln!("this should not happen unless manual files are created");
-                            eprintln!("skipping this file\n");
+                            log(&format!(
+                                "file \"{}\" does not end with .tmp\n
+                                this should not happen unless manual files are created\n
+                                skipping this file\n",
+                                original_file_name
+                            ));
                             continue 'files;
                         }
 
                         let timestamp_str = &file[..file.len() - ".tmp".len()];
-                        let timestamp = timestamp_str
-                            .parse::<u64>()
-                            .expect("could not parse timestamp");
+                        let timestamp = timestamp_str.parse::<u64>().unwrap_or_else(|e| {
+                            log_and_panic(&format!(
+                                "could not parse timestamp {} {}",
+                                timestamp_str, e
+                            ));
+                            unreachable!();
+                        });
 
                         // found a newer file
                         if timestamp > most_recent_timestamp.unwrap_or(0) {
@@ -126,8 +144,10 @@ pub fn provide_file_handler(handler: FileHandler) -> Sender<ClipboardAction> {
     thread::spawn(move || loop {
         let action = action_receiver.recv();
         if let Err(e) = action {
-            eprintln!("could not receive action: {}", e);
-            eprintln!("stopping file handler");
+            log(&format!(
+                "could not receive action: {}\nstopping file handler\n",
+                e
+            ));
             break;
         }
 
@@ -138,28 +158,23 @@ pub fn provide_file_handler(handler: FileHandler) -> Sender<ClipboardAction> {
                 }
                 Some(file_name) => {
                     let file_path = format!("{}/{}", handler.config.dir_name, file_name);
-                    let content = fs::read_to_string(&file_path).expect("could not read file");
+                    let content = fs::read_to_string(&file_path).unwrap_or_else(|e| {
+                        log_and_panic(&format!("could not read file {} {}", file_path, e));
+                        unreachable!();
+                    });
+
                     *loaded_clipboard.lock().unwrap() = Some(content);
                     if let Err(e) = handler.try_delete_own_file() {
-                        panic!("could not delete own file: {}", e);
+                        log_and_panic(&format!("could not delete own file: {}\n", e));
                     }
                 }
             },
             ClipboardAction::Store(content) => {
-                handler
-                    .generate_file(&content)
-                    .expect("could not generate file");
+                if let Err(e) = handler.generate_file(&content) {
+                    log_and_panic(&format!("could not generate file: {}", e));
+                }
             }
         }
     });
     action_sender
-}
-
-fn get_timestamp() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time went backwards")
-        .as_secs()
 }

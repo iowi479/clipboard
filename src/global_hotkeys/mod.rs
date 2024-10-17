@@ -8,6 +8,7 @@
 mod keyboard;
 
 use crate::file_handlers::ClipboardAction;
+use crate::logfile::{log, log_and_panic};
 use keyboard::KeyboardKey;
 use std::ffi::{c_int, c_ulong};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -88,7 +89,13 @@ impl Drop for KeyboardListener {
 /// sets the sender for the clipboard actions
 /// this sender will send the actions activated by the hotkeys
 pub fn set_action_sender(sender: mpsc::Sender<ClipboardAction>) {
-    CLIPBOARD_ACTION_SENDER.lock().unwrap().replace(sender);
+    CLIPBOARD_ACTION_SENDER
+        .lock()
+        .unwrap_or_else(|e| {
+            &format!("could not aquire action sender {}", e);
+            unreachable!();
+        })
+        .replace(sender);
 }
 
 /// sends the action to the file_handler via the established channel
@@ -96,18 +103,19 @@ fn send_action(action: ClipboardAction) {
     match CLIPBOARD_ACTION_SENDER.lock() {
         Ok(sender) => match sender.as_ref() {
             None => {
-                panic!("tried to use action-sender, but it was not set");
+                log_and_panic("tried to use action-sender, but it was not set");
             }
             Some(sender) => {
                 if let Err(e) = sender.send(action) {
-                    panic!("could not send action to the file-handler: {}", e);
+                    log_and_panic(&format!("could not send action to the file-handler: {}", e));
                 }
             }
         },
         Err(e) => {
-            panic!(
-                "could not aquire lock to the action-sender.\nIt seems like the channel broke... {}", e
-            );
+            log_and_panic(&format!(
+                "could not aquire lock to the action-sender.\nIt seems like the channel broke... {}",
+                e
+            ));
         }
     }
 }
@@ -138,9 +146,12 @@ unsafe extern "system" fn keybd_proc(code: c_int, w_param: WPARAM, l_param: LPAR
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(1));
                         let content = clipboard_win::get_clipboard(clipboard_win::formats::Unicode)
-                            .expect("To get clipboard");
+                            .unwrap_or_else(|e| {
+                                log_and_panic(&format!("could not get clipboard: {}", e));
+                                unreachable!();
+                            });
 
-                        println!("Insertet <{}>", &content);
+                        log(&format!("Copied <{}>\n", &content));
                         send_action(ClipboardAction::Store(content));
                     });
                 }
@@ -150,11 +161,18 @@ unsafe extern "system" fn keybd_proc(code: c_int, w_param: WPARAM, l_param: LPAR
                     || R_CONTROL_PRESSED.load(Ordering::Relaxed)
                 {
                     // check if atleast one crtl is currently pressed
-                    let content = LOADED_CLIPBOARD.lock().expect("Could not aquire lock for the loaded clipboard value. This means the loading of a value failed or is still locking it...").clone();
+                    let content = LOADED_CLIPBOARD.lock().unwrap_or_else(|e| {
+                        &format!("Could not aquire lock for the loaded clipboard value. This means the loading of a value failed or is still locking it... {}", e);
+                        unreachable!();
+                    }).clone();
+
                     if let Some(content) = content {
-                        println!("Insertet <{}>", &content);
-                        clipboard_win::set_clipboard(clipboard_win::formats::Unicode, content)
-                            .expect("To set clipboard");
+                        log(&format!("Insertet <{}>\n", &content));
+                        if let Err(e) =
+                            clipboard_win::set_clipboard(clipboard_win::formats::Unicode, content)
+                        {
+                            log_and_panic(&format!("could not set clipboard: {}", e));
+                        }
                     }
                 }
             }
