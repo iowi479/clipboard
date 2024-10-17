@@ -22,9 +22,15 @@ impl FileHandler {
 
     /// reads all filenames of the files in the config.dir_name directory. Here every osfile is
     /// included.
-    fn get_all_files(&self) -> Result<Vec<String>, std::io::Error> {
+    fn get_all_files(&self) -> io::Result<Vec<String>> {
         let files: Vec<_> = fs::read_dir(&self.config.dir_name)?
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .map(|entry| {
+                entry
+                    .expect("couldnt read a file name. Something went wrong with the filesystem")
+                    .file_name()
+                    .to_string_lossy()
+                    .to_string()
+            })
             .collect();
 
         Ok(files)
@@ -36,8 +42,8 @@ impl FileHandler {
         let mut most_recent_file = None;
         let mut most_recent_timestamp = None;
 
-        'files: for file_name in files.iter().map(|f| f.as_str()) {
-            let mut file = file_name;
+        'files: for original_file_name in files.iter().map(|f| f.as_str()) {
+            let mut file = original_file_name;
 
             if !file.starts_with("clipboard-") {
                 // not a clipboard file
@@ -46,7 +52,7 @@ impl FileHandler {
 
             file = &file["clipboard-".len()..];
 
-            for remote_name in &self.remote_names {
+            for remote_name in &self.config.remote_names {
                 if file.starts_with(remote_name) {
                     file = &file[remote_name.len()..];
 
@@ -72,7 +78,7 @@ impl FileHandler {
                         // found a newer file
                         if timestamp > most_recent_timestamp.unwrap_or(0) {
                             most_recent_timestamp = Some(timestamp);
-                            most_recent_file = Some(file_name);
+                            most_recent_file = Some(original_file_name);
                         }
                     }
                 }
@@ -83,42 +89,37 @@ impl FileHandler {
     }
 
     fn generate_file(&self, text: &str) -> io::Result<()> {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("generation of a timestamp failed\n which means the system time is broken")
-            .as_secs();
-
         let file_name = format!(
             "clipboard-{}-{}.tmp",
-            self.local_name,
-            timestamp.to_string()
+            self.config.local_name,
+            get_timestamp()
         );
 
-        let file_path = format!("{}/{}", self.dir_name, file_name);
+        let file_path = format!("{}/{}", self.config.dir_name, file_name);
 
         // check if there is already a file created from this instance. If so, delete it.
-        self.try_delete_own_file();
+        self.try_delete_own_file()?;
 
         fs::write(&file_path, text)
     }
 
-    fn try_delete_own_file(&self) {
-        let files = self.get_all_files().expect("could not read files");
+    fn try_delete_own_file(&self) -> io::Result<()> {
+        let files = self.get_all_files()?;
 
         for file_name in files.iter().map(|f| f.as_str()) {
-            if file_name.starts_with(format!("clipboard-{}", self.local_name).as_str()) {
-                let file_path = format!("{}/{}", self.dir_name, file_name);
-                fs::remove_file(&file_path).expect("could not delete file");
+            if file_name.starts_with(format!("clipboard-{}-", self.config.local_name).as_str()) {
+                let file_path = format!("{}/{}", self.config.dir_name, file_name);
+                fs::remove_file(&file_path)?;
 
                 // there should only be one file created by this instance
                 break;
             }
         }
+        Ok(())
     }
 }
 
 pub fn provide_file_handler(handler: FileHandler) -> Sender<ClipboardAction> {
-    // TODO: channels...
     let (action_sender, action_receiver) = mpsc::channel();
     let loaded_clipboard = &LOADED_CLIPBOARD;
 
@@ -136,10 +137,12 @@ pub fn provide_file_handler(handler: FileHandler) -> Sender<ClipboardAction> {
                     *loaded_clipboard.lock().unwrap() = None;
                 }
                 Some(file_name) => {
-                    let file_path = format!("{}/{}", handler.dir_name, file_name);
+                    let file_path = format!("{}/{}", handler.config.dir_name, file_name);
                     let content = fs::read_to_string(&file_path).expect("could not read file");
                     *loaded_clipboard.lock().unwrap() = Some(content);
-                    handler.try_delete_own_file();
+                    if let Err(e) = handler.try_delete_own_file() {
+                        panic!("could not delete own file: {}", e);
+                    }
                 }
             },
             ClipboardAction::Store(content) => {
@@ -150,4 +153,13 @@ pub fn provide_file_handler(handler: FileHandler) -> Sender<ClipboardAction> {
         }
     });
     action_sender
+}
+
+fn get_timestamp() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_secs()
 }

@@ -18,14 +18,9 @@ impl Config {
     pub fn load() -> io::Result<Self> {
         let content = fs::read_to_string(CONFIG_FILE_NAME)?;
 
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("generation of a timestamp failed\n which means the system time is broken")
-            .as_secs();
-
-        let mut conf_local_name = timestamp.to_string();
-        let mut conf_remote_names = Vec::new();
-        let mut conf_dir_name = String::from("./");
+        let mut conf_local_name = None;
+        let mut conf_remote_names = None;
+        let mut conf_dir_name = None;
 
         content.lines().for_each(|line| {
             // skip empty lines
@@ -39,17 +34,30 @@ impl Config {
 
             match key {
                 "local_name" => {
-                    conf_local_name = value.to_string();
+                    if conf_local_name.is_some() {
+                        panic!("local_name is a duplicate");
+                    }
+                    conf_local_name = Some(value.to_string());
                 }
                 "remote_names" => {
-                    conf_remote_names = value.split(",").map(|s| s.trim().to_string()).collect();
+                    if conf_remote_names.is_some() {
+                        panic!("remote_names is a duplicate");
+                    }
+                    conf_remote_names =
+                        Some(value.split(",").map(|s| s.trim().to_string()).collect());
                 }
                 "dir_name" => {
-                    conf_dir_name = value.to_string();
-                    if let Err(e) = std::fs::read_dir(&conf_dir_name) {
+                    if conf_dir_name.is_some() {
+                        panic!("dir_name is a duplicate");
+                    }
+
+                    conf_dir_name = Some(value.to_string());
+
+                    if let Err(e) = std::fs::read_dir(&conf_dir_name.as_ref().unwrap()) {
                         panic!(
                             "Could not read specified directory: {}\n{}",
-                            conf_dir_name, e
+                            conf_dir_name.as_ref().unwrap(),
+                            e
                         );
                     }
                 }
@@ -60,9 +68,9 @@ impl Config {
         });
 
         let config = Self {
-            local_name: conf_local_name,
-            remote_names: conf_remote_names,
-            dir_name: conf_dir_name,
+            local_name: conf_local_name.expect("local_name not provided"),
+            remote_names: conf_remote_names.expect("remote_names not provided"),
+            dir_name: conf_dir_name.expect("dir_name not provided"),
         };
 
         Ok(config)
