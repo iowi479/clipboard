@@ -52,6 +52,13 @@ impl Config {
                 })
                 .trim();
 
+            if value.is_empty() {
+                log_and_panic(&format!(
+                    "no value provided on line in config file:\n{}",
+                    line
+                ));
+            }
+
             match key {
                 "local_name" => {
                     if conf_local_name.is_some() {
