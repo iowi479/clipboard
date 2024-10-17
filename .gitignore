@@ -4,3 +4,4 @@ Cargo.lock
 
 # these are the clipboard files
 *.tmp
+config.ini
