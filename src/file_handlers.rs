@@ -180,7 +180,7 @@ fn action_handler(
                     }
 
                     if let Err(e) = handler.try_delete_file(&file_name) {
-                        log_and_panic(&format!("could not delete file: {}\n", e));
+                        log(&format!("could not delete file: {}\nThis is ignored since the program will run fine. But it will leave useless .tmp files behind.", e));
                     }
                 }
             },
