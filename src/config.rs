@@ -1,7 +1,4 @@
-use std::fs;
-use std::io;
-
-use crate::logfile::log_and_panic;
+use anyhow::{anyhow, bail, Context, Result};
 
 pub struct Config {
     pub local_name: String,
@@ -17,96 +14,92 @@ const CONFIG_FILE_NAME: &str = "config.ini";
 // dir_name=./
 
 impl Config {
-    pub fn load() -> io::Result<Self> {
-        let content = fs::read_to_string(CONFIG_FILE_NAME)?;
+    pub fn load() -> Result<Self> {
+        let content = std::fs::read_to_string(CONFIG_FILE_NAME)
+            .with_context(|| format!("Looking for config-file at: {}", CONFIG_FILE_NAME))?;
 
         let mut conf_local_name = None;
         let mut conf_remote_names = None;
         let mut conf_dir_name = None;
 
-        content.lines().for_each(|line| {
-            // skip empty lines
-            if line.is_empty() {
-                return;
+        for (i, line) in content.lines().enumerate() {
+            // skip empty lines or comments
+            if line.is_empty() || line.starts_with("#") {
+                continue;
             }
 
             let mut parts = line.split("=");
             let key = parts
                 .next()
-                .unwrap_or_else(|| {
-                    log_and_panic(&format!(
-                        "no key provided on line in config file:\n{}",
-                        line
-                    ));
-                    unreachable!();
-                })
-                .trim();
-            let value = parts
-                .next()
-                .unwrap_or_else(|| {
-                    log_and_panic(&format!(
-                        "no value provided on line in config file:\n{}",
-                        line
-                    ));
-                    unreachable!();
-                })
+                .with_context(|| {
+                    format!("no key provided on line {} in config file:\n{}", i, line)
+                })?
                 .trim();
 
+            let value = parts
+                .next()
+                .with_context(|| {
+                    format!("no value provided on line {} in config file:\n{}", i, line)
+                })?
+                .trim();
+
+            if parts.next().is_some() {
+                bail!("too many parts on line {} in config file:\n{}", i, line);
+            }
+
             if value.is_empty() {
-                log_and_panic(&format!(
-                    "no value provided on line in config file:\n{}",
-                    line
-                ));
+                bail!("no value provided on line {} in config file:\n{}", i, line);
             }
 
             match key {
                 "local_name" => {
                     if conf_local_name.is_some() {
-                        log_and_panic("local_name is a duplicate");
+                        bail!("local_name is a duplicate");
                     }
                     conf_local_name = Some(value.to_string());
                 }
                 "remote_names" => {
                     if conf_remote_names.is_some() {
-                        log_and_panic("remote_names is a duplicate");
+                        bail!("remote_names is a duplicate");
                     }
                     conf_remote_names =
                         Some(value.split(",").map(|s| s.trim().to_string()).collect());
                 }
                 "dir_name" => {
                     if conf_dir_name.is_some() {
-                        log_and_panic("dir_name is a duplicate");
+                        bail!("dir_name is a duplicate");
                     }
 
                     conf_dir_name = Some(value.to_string());
 
-                    if let Err(e) = std::fs::read_dir(&conf_dir_name.as_ref().unwrap()) {
-                        log_and_panic(&format!(
-                            "Could not read specified directory: {}\n{}",
-                            conf_dir_name.as_ref().unwrap(),
-                            e
-                        ));
-                    }
+                    std::fs::read_dir(value).with_context(|| {
+                        format!("Could not read specified directory: {}", value)
+                    })?;
                 }
                 _ => {
-                    log_and_panic(&format!("Unknown key in config file: {}", key));
+                    bail!(
+                        "unknown key {} on line {} in config file:\n{}",
+                        key,
+                        i,
+                        line
+                    );
                 }
             }
-        });
+        }
+
+        let local_name = conf_local_name.ok_or_else(|| anyhow!("local_name not provided"))?;
+        let remote_names = conf_remote_names.ok_or_else(|| anyhow!("remote_names not provided"))?;
+
+        for r_name in &remote_names {
+            if r_name == &local_name {
+                bail!("remote_names contains local_name which is invalid");
+            }
+        }
 
         let config = Self {
-            local_name: conf_local_name.unwrap_or_else(|| {
-                log_and_panic("local_name not provided");
-                unreachable!();
-            }),
-            remote_names: conf_remote_names.unwrap_or_else(|| {
-                log_and_panic("remote_names not provided");
-                unreachable!()
-            }),
-            dir_name: conf_dir_name.unwrap_or_else(|| {
-                log_and_panic("dir_name not provided");
-                unreachable!()
-            }),
+            local_name,
+            remote_names,
+            dir_name: conf_dir_name.ok_or_else(|| anyhow!("dir_name not provided"))?,
         };
 
         Ok(config)
