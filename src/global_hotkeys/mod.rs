@@ -123,9 +123,6 @@ unsafe extern "system" fn keybd_proc(code: c_int, w_param: WPARAM, l_param: LPAR
 
     #[allow(non_snake_case)]
     if event_type == WM_KEYDOWN || event_type == WM_SYSKEYDOWN {
-        //TODO:: debug line
-        println!("key: {:?}", key);
-
         match key {
             KeyboardKey::LControlKey => {
                 L_CONTROL_PRESSED.store(true, Ordering::Relaxed);
