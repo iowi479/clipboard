@@ -9,6 +9,7 @@ mod keyboard;
 
 use crate::file_handlers::ClipboardAction;
 use crate::logfile::{log, log_and_panic};
+use anyhow::{anyhow, bail, Context, Result};
 use keyboard::KeyboardKey;
 use std::ffi::{c_int, c_ulong};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -88,34 +89,28 @@ impl Drop for KeyboardListener {
 
 /// sets the sender for the clipboard actions
 /// this sender will send the actions activated by the hotkeys
-pub fn set_action_sender(sender: mpsc::Sender<ClipboardAction>) {
+pub fn set_action_sender(sender: mpsc::Sender<ClipboardAction>) -> Result<()> {
     CLIPBOARD_ACTION_SENDER
         .lock()
-        .unwrap_or_else(|e| {
-            let _ = &format!("could not aquire action sender {}", e);
-            unreachable!();
-        })
+        .map_err(|e| anyhow!(e.to_string()))?
         .replace(sender);
+
+    Ok(())
 }
 
 /// sends the action to the file_handler via the established channel
-fn send_action(action: ClipboardAction) {
+fn send_action(action: ClipboardAction) -> Result<()> {
     match CLIPBOARD_ACTION_SENDER.lock() {
         Ok(sender) => match sender.as_ref() {
             None => {
-                log_and_panic("tried to use action-sender, but it was not set");
+                bail!("tried to use action-sender, but it was not set");
             }
-            Some(sender) => {
-                if let Err(e) = sender.send(action) {
-                    log_and_panic(&format!("could not send action to the file-handler: {}", e));
-                }
-            }
+            Some(sender) => sender
+                .send(action)
+                .with_context(|| "could not send action to the file-handler"),
         },
         Err(e) => {
-            log_and_panic(&format!(
-                "could not aquire lock to the action-sender.\nIt seems like the channel broke... {}",
-                e
-            ));
+            bail!("could not aquire lock. It seems like the channel broke: {e}",);
         }
     }
 }
@@ -128,14 +123,21 @@ unsafe extern "system" fn keybd_proc(code: c_int, w_param: WPARAM, l_param: LPAR
 
     #[allow(non_snake_case)]
     if event_type == WM_KEYDOWN || event_type == WM_SYSKEYDOWN {
+        //TODO:: debug line
+        println!("key: {:?}", key);
+
         match key {
             KeyboardKey::LControlKey => {
                 L_CONTROL_PRESSED.store(true, Ordering::Relaxed);
-                send_action(ClipboardAction::TryLoad);
+                let _ = send_action(ClipboardAction::TryLoad).map_err(|e| {
+                    log_and_panic(&format!("could not send action: {}", e));
+                });
             }
             KeyboardKey::RControlKey => {
                 R_CONTROL_PRESSED.store(true, Ordering::Relaxed);
-                send_action(ClipboardAction::TryLoad);
+                let _ = send_action(ClipboardAction::TryLoad).map_err(|e| {
+                    log_and_panic(&format!("could not send action: {}", e));
+                });
             }
 
             KeyboardKey::CKey => {
@@ -147,8 +149,12 @@ unsafe extern "system" fn keybd_proc(code: c_int, w_param: WPARAM, l_param: LPAR
                         std::thread::sleep(std::time::Duration::from_secs(1));
                         match clipboard_win::get_clipboard(clipboard_win::formats::Unicode) {
                             Ok(content) => {
-                                log(&format!("Copied <{}>\n", &content));
-                                send_action(ClipboardAction::Store(content));
+                                let content: String = content;
+                                let _ = send_action(ClipboardAction::Store(content.clone()))
+                                    .unwrap_or_else(|e| {
+                                        log_and_panic(&format!("could not send action: {}", e));
+                                    });
+                                log(&format!("Stored <{}>\n", content));
                             }
                             Err(e) => {
                                 log(&format!("could not get clipboard: {}", e));
@@ -168,12 +174,11 @@ unsafe extern "system" fn keybd_proc(code: c_int, w_param: WPARAM, l_param: LPAR
                     }).clone();
 
                     if let Some(content) = content {
+                        clipboard_win::set_clipboard(clipboard_win::formats::Unicode, &content)
+                            .unwrap_or_else(|e| {
+                                log_and_panic(&format!("could not set clipboard: {}", e))
+                            });
                         log(&format!("Inserted <{}>\n", &content));
-                        if let Err(e) =
-                            clipboard_win::set_clipboard(clipboard_win::formats::Unicode, content)
-                        {
-                            log_and_panic(&format!("could not set clipboard: {}", e));
-                        }
                     }
                 }
             }

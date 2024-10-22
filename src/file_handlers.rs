@@ -2,8 +2,10 @@ use crate::config::Config;
 use crate::global_hotkeys::LOADED_CLIPBOARD;
 use crate::logfile::{log, log_and_panic};
 use crate::utils::get_timestamp;
+use anyhow::{Context, Result};
+use std::sync::mpsc::Receiver;
+use std::sync::Mutex;
 use std::{
-    fs, io,
     sync::mpsc::{self, Sender},
     thread,
 };
@@ -24,31 +26,25 @@ impl FileHandler {
 
     /// reads all filenames of the files in the config.dir_name directory. Here every osfile is
     /// included.
-    fn get_all_files(&self) -> io::Result<Vec<String>> {
-        let files: Vec<_> = fs::read_dir(&self.config.dir_name)?
+    fn get_all_files(&self) -> Result<Vec<String>> {
+        let files: Result<Vec<_>> = std::fs::read_dir(&self.config.dir_name)
+            .with_context(|| format!("tried to read {}", self.config.dir_name))?
             .map(|entry| {
-                entry
-                    .unwrap_or_else(|e| {
-                        log_and_panic(&format!(
-                            "could not read a file name. Something went wrong with the filesystem {}",
-                            e
-                        ));
-                        unreachable!();
-                    })
+                Ok(entry
+                    .with_context(|| {
+                        "could not read a file name. Something went wrong with the filesystem"
+                    })?
                     .file_name()
                     .to_string_lossy()
-                    .to_string()
+                    .to_string())
             })
             .collect();
 
-        Ok(files)
+        Ok(files?)
     }
 
-    fn get_file_to_load(&self) -> Option<String> {
-        let files = self.get_all_files().unwrap_or_else(|e| {
-            log_and_panic(&format!("could not read files {}", e));
-            unreachable!();
-        });
+    fn get_file_to_load(&self) -> Result<Option<String>> {
+        let files = self.get_all_files()?;
 
         let mut most_recent_file = None;
         let mut most_recent_timestamp = None;
@@ -85,13 +81,9 @@ impl FileHandler {
                         }
 
                         let timestamp_str = &file[..file.len() - ".tmp".len()];
-                        let timestamp = timestamp_str.parse::<u64>().unwrap_or_else(|e| {
-                            log_and_panic(&format!(
-                                "could not parse timestamp {} {}",
-                                timestamp_str, e
-                            ));
-                            unreachable!();
-                        });
+                        let timestamp = timestamp_str
+                            .parse::<u64>()
+                            .with_context(|| "could not parse timestamp")?;
 
                         // found a newer file
                         if timestamp > most_recent_timestamp.unwrap_or(0) {
@@ -103,10 +95,10 @@ impl FileHandler {
             }
         }
 
-        most_recent_file.map(|f| f.to_string())
+        Ok(most_recent_file.map(|f| f.to_string()))
     }
 
-    fn generate_file(&self, text: &str) -> io::Result<()> {
+    fn generate_file(&self, text: &str) -> Result<()> {
         let file_name = format!(
             "clipboard-{}-{}.tmp",
             self.config.local_name,
@@ -118,16 +110,17 @@ impl FileHandler {
         // check if there is already a file created from this instance. If so, delete it.
         self.try_delete_own_file()?;
 
-        fs::write(&file_path, text)
+        std::fs::write(&file_path, text)
+            .with_context(|| format!("could not write to file {}", file_path))
     }
 
-    fn try_delete_own_file(&self) -> io::Result<()> {
+    fn try_delete_own_file(&self) -> Result<()> {
         let files = self.get_all_files()?;
 
         for file_name in files.iter().map(|f| f.as_str()) {
             if file_name.starts_with(format!("clipboard-{}-", self.config.local_name).as_str()) {
                 let file_path = format!("{}/{}", self.config.dir_name, file_name);
-                fs::remove_file(&file_path)?;
+                std::fs::remove_file(&file_path)?;
 
                 // there should only be one file created by this instance
                 break;
@@ -136,8 +129,9 @@ impl FileHandler {
         Ok(())
     }
 
-    fn try_delete_file(&self, file_path: &str) -> io::Result<()> {
-        fs::remove_file(&file_path)
+    fn try_delete_file(&self, file_path: &str) -> Result<()> {
+        std::fs::remove_file(&file_path)?;
+        Ok(())
     }
 }
 
@@ -145,10 +139,20 @@ pub fn provide_file_handler(handler: FileHandler) -> Sender<ClipboardAction> {
     let (action_sender, action_receiver) = mpsc::channel();
     let loaded_clipboard = &LOADED_CLIPBOARD;
 
-    thread::spawn(move || loop {
+    thread::spawn(move || action_handler(action_receiver, handler, loaded_clipboard));
+
+    action_sender
+}
+
+fn action_handler(
+    action_receiver: Receiver<ClipboardAction>,
+    handler: FileHandler,
+    loaded_clipboard: &Mutex<Option<String>>,
+) {
+    loop {
         let action = action_receiver.recv();
         if let Err(e) = action {
-            log(&format!(
+            log_and_panic(&format!(
                 "could not receive action: {}\nstopping file handler\n",
                 e
             ));
@@ -157,12 +161,15 @@ pub fn provide_file_handler(handler: FileHandler) -> Sender<ClipboardAction> {
 
         match action.unwrap() {
             ClipboardAction::TryLoad => match handler.get_file_to_load() {
-                None => {
+                Err(e) => {
+                    log_and_panic(&e.to_string());
+                }
+                Ok(None) => {
                     *loaded_clipboard.lock().unwrap() = None;
                 }
-                Some(file_name) => {
+                Ok(Some(file_name)) => {
                     let file_path = format!("{}/{}", handler.config.dir_name, file_name);
-                    let content = fs::read_to_string(&file_path).unwrap_or_else(|e| {
+                    let content = std::fs::read_to_string(&file_path).unwrap_or_else(|e| {
                         log_and_panic(&format!("could not read file {} {}", file_path, e));
                         unreachable!();
                     });
@@ -183,6 +190,5 @@ pub fn provide_file_handler(handler: FileHandler) -> Sender<ClipboardAction> {
                 }
             }
         }
-    });
-    action_sender
+    }
 }
