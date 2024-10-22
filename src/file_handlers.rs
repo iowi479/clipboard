@@ -49,48 +49,45 @@ impl FileHandler {
         let mut most_recent_file = None;
         let mut most_recent_timestamp = None;
 
-        'files: for original_file_name in files.iter().map(|f| f.as_str()) {
-            let mut file = original_file_name;
+        for original_file_name in files.iter().map(|f| f.as_str()) {
+            let parts: Vec<_> = original_file_name.split("-").collect();
 
-            if !file.starts_with("clipboard-") {
+            if parts.len() != 3 {
                 // not a clipboard file
                 continue;
             }
 
-            file = &file["clipboard-".len()..];
+            if parts[0] != "clipboard" {
+                // not a clipboard file
+                continue;
+            }
 
-            for remote_name in &self.config.remote_names {
-                if file.starts_with(remote_name) {
-                    file = &file[remote_name.len()..];
+            let name = parts[1];
+            if !parts[2].ends_with(".tmp") {
+                log(&format!(
+                    "found file that does not end with .tmp... skipping: {}",
+                    original_file_name
+                ));
+                continue;
+            }
 
-                    // check if char after remote_name is a '-'. Otherwise remote_names that contain
-                    // others as a prefix are wrongly recognized
-                    if file.starts_with("-") {
-                        file = &file[1..];
-                        // found a file created by a instance we are listening to
-                        // now this needs to be checked if it is the most recent file
+            // remove trailing ".tmp" and parse the timestamp
+            let timestamp = parts[2][..parts[2].len() - ".tmp".len()]
+                .parse::<u64>()
+                .with_context(|| "could not parse timestamp")?;
 
-                        if !file.ends_with(".tmp") {
-                            log(&format!(
-                                "file \"{}\" does not end with .tmp\n
-                                this should not happen unless manual files are created\n
-                                skipping this file\n",
-                                original_file_name
-                            ));
-                            continue 'files;
-                        }
+            // found a newer file
+            if timestamp > most_recent_timestamp.unwrap_or(0) {
+                most_recent_timestamp = Some(timestamp);
 
-                        let timestamp_str = &file[..file.len() - ".tmp".len()];
-                        let timestamp = timestamp_str
-                            .parse::<u64>()
-                            .with_context(|| "could not parse timestamp")?;
+                if name == self.config.local_name {
+                    // file created by this instance
+                    most_recent_file = None;
+                    continue;
+                }
 
-                        // found a newer file
-                        if timestamp > most_recent_timestamp.unwrap_or(0) {
-                            most_recent_timestamp = Some(timestamp);
-                            most_recent_file = Some(original_file_name);
-                        }
-                    }
+                if self.config.remote_names.iter().any(|x| x == name) {
+                    most_recent_file = Some(original_file_name);
                 }
             }
         }
